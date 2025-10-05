@@ -89,10 +89,14 @@ export function CDPlayer() {
         <div className="cd-player-inner">
           <div className="display-screen">
             <div className="track-info">
-              <div className="track-number">{audioFiles[currentTrack].name}</div>
+              <div className="track-number">
+                {audioFiles[currentTrack].name}
+              </div>
               <div className="date-display">11:25AM Aug 22, 2025</div>
             </div>
-            <div className="page-counter">3/{totalTracks}</div>
+            <div className="page-counter">
+              {currentTrack + 1}/{totalTracks}
+            </div>
           </div>
 
           <div className="cd-disc">
