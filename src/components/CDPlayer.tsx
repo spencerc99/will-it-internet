@@ -87,6 +87,10 @@ export function CDPlayer() {
     <div className="cd-player">
       <div className="cd-player-outer">
         <div className="cd-player-inner">
+          <div className="player-title">
+            dakka to dakka
+          </div>
+
           <div className="display-screen">
             <div className="track-info">
               <div className="track-number">
