@@ -26,7 +26,7 @@ const NextIcon = () => (
   </svg>
 );
 
-const audioFiles = audioFilesData as Array<{ path: string; name: string }>;
+const audioFiles = audioFilesData as Array<{ path: string; name: string; date?: string }>;
 
 export function CDPlayer() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -96,7 +96,9 @@ export function CDPlayer() {
               <div className="track-number">
                 {audioFiles[currentTrack].name}
               </div>
-              <div className="date-display">11:25AM Aug 22, 2025</div>
+              <div className="date-display">
+                {audioFiles[currentTrack].date || "Unknown date"}
+              </div>
             </div>
             <div className="page-counter">
               {currentTrack + 1}/{totalTracks}
