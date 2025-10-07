@@ -77,11 +77,30 @@ export function CDPlayer() {
   const handleTrackEnd = () => {
     const next = (currentTrack + 1) % audioFiles.length;
     setCurrentTrack(next);
+  };
+
+  const selectTrack = (index: number) => {
+    setCurrentTrack(index);
     if (audioRef.current) {
       audioRef.current.load();
-      audioRef.current.play();
+      audioRef.current.play().then(() => {
+        setIsPlaying(true);
+      }).catch(err => {
+        console.error("Error playing audio:", err);
+        setIsPlaying(false);
+      });
     }
   };
+
+  useEffect(() => {
+    if (audioRef.current && isPlaying) {
+      audioRef.current.play().catch(err => {
+        console.error("Error playing audio:", err);
+        setIsPlaying(false);
+      });
+    }
+  }, [currentTrack, isPlaying]);
+
 
   return (
     <div className="cd-player">
@@ -92,16 +111,54 @@ export function CDPlayer() {
           </div>
 
           <div className="display-screen">
-            <div className="track-info">
-              <div className="track-number">
-                {audioFiles[currentTrack].name}
+            <div className="now-playing-header">
+              <div className="track-info">
+                <div className="track-number">
+                  {audioFiles[currentTrack].name}
+                </div>
+                <div className="date-display">
+                  {audioFiles[currentTrack].date || "Unknown date"}
+                </div>
               </div>
-              <div className="date-display">
-                {audioFiles[currentTrack].date || "Unknown date"}
+              <div className="page-counter">
+                {currentTrack + 1}/{totalTracks}
               </div>
             </div>
-            <div className="page-counter">
-              {currentTrack + 1}/{totalTracks}
+
+            <div className="track-list">
+              {audioFiles.map((track, index) => (
+                <div
+                  key={index}
+                  className={`track-item ${index === currentTrack ? 'active' : ''}`}
+                  onClick={() => selectTrack(index)}
+                >
+                  <span className="track-index">{index + 1}</span>
+                  <div className="track-details">
+                    <div className="track-name-container">
+                      <span className="track-name">
+                        {track.name}
+                      </span>
+                      {track.date && (
+                        <span className="track-date">
+                          {(() => {
+                            const match = track.date.match(/(\d+):(\d+)(AM|PM)\s+(\w+)\s+(\d+),\s+(\d+)/);
+                            if (match) {
+                              const [_, hour, min, ampm, month, day, year] = match;
+                              const months: Record<string, string> = {
+                                'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+                                'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+                                'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+                              };
+                              return `${months[month]}/${day.padStart(2, '0')}/${year.slice(-2)}`;
+                            }
+                            return track.date;
+                          })()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
