@@ -13,10 +13,23 @@ function formatDate(dateStr: string, timeStr: string): string {
   const hour = parseInt(timeStr.substring(0, 2));
   const minute = timeStr.substring(2, 4);
 
-  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const ampm = hour >= 12 ? "PM" : "AM";
   const hour12 = hour % 12 || 12;
 
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const monthName = months[parseInt(month) - 1];
 
   return `${hour12}:${minute}${ampm} ${monthName} ${parseInt(day)}, ${year}`;
@@ -26,6 +39,7 @@ try {
   const files = readdirSync(audioDir)
     .filter((file) => file.match(/\.(m4a|mp3|wav|ogg)$/i))
     .sort()
+    .reverse()
     .map((file) => {
       const match = file.match(/^(\d{8})_(\d{6})_(.+)\.(m4a|mp3|wav|ogg)$/i);
 
