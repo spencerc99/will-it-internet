@@ -16,7 +16,8 @@
     "react-helmet-async": "^2.0.5",
     "react-router-dom": "^7.9.3",
     "sass": "^1.83.0",
-    "spotify-buddylist": "^3.0.0"
+    "spotify-buddylist": "^3.0.0",
+    "spotify-web-api-js": "^1.5.2"
   },
   "devDependencies": {
     "@types/react": "^18.3.17",

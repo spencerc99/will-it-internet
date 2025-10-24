@@ -1,170 +1,269 @@
-import { useState, useEffect } from "react";
-import * as buddyList from "spotify-buddylist";
-import { useStickyState } from "../hooks/useStickyState";
+// ABOUTME: Component that plays a random Spotify playlist or album that hasn't been played recently
+// ABOUTME: Tracks play history in localStorage and persists access token
 
-// Use types from spotify-buddylist library
-type Friend = buddyList.Friend;
+import React, { useState, useEffect } from "react";
+import SpotifyWebApi from "spotify-web-api-js";
 
-export default function Page4() {
-  const [spDcCookie, setSpDcCookie] = useState("");
-  const [accessToken, setAccessToken] = useState(""); // Generated from sp_dc, used for playback
-  const [friends, setFriends] = useState<Friend[]>([]);
+interface MusicItem {
+  id: string;
+  name: string;
+  uri: string;
+  type: "playlist" | "album";
+  images?: Array<{ url: string }>;
+  tracks: {
+    total: number;
+  };
+  artist?: string;
+}
+
+interface PlayHistory {
+  [itemId: string]: number;
+}
+
+const RandomPlaylistPlayer: React.FC = () => {
+  const [accessToken, setAccessToken] = useState("");
+  const [items, setItems] = useState<MusicItem[]>([]);
+  const [selectedItem, setSelectedItem] = useState<MusicItem | null>(null);
+  const [playHistory, setPlayHistory] = useState<PlayHistory>({});
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const spotifyApiRef = React.useRef(new SpotifyWebApi());
 
   useEffect(() => {
-    const savedCookie = sessionStorage.getItem("spotify_cookie");
+    const savedToken = localStorage.getItem("spotify_token");
+    const savedHistory = localStorage.getItem("playlist_play_history");
 
-    if (savedCookie) {
-      setSpDcCookie(savedCookie);
+    if (savedToken) {
+      setAccessToken(savedToken);
+      spotifyApiRef.current.setAccessToken(savedToken);
       setIsAuthenticated(true);
-      loadFriendActivity(savedCookie);
+      loadItems(savedToken);
+    }
+
+    if (savedHistory) {
+      setPlayHistory(JSON.parse(savedHistory));
     }
   }, []);
 
-  const saveCredentials = () => {
-    if (!spDcCookie.trim()) {
-      alert("Please enter your sp_dc cookie");
+  const saveCredentials = async () => {
+    if (!accessToken.trim()) {
+      alert("Please enter your access token");
       return;
     }
 
-    sessionStorage.setItem("spotify_cookie", spDcCookie);
+    localStorage.setItem("spotify_token", accessToken);
+    spotifyApiRef.current.setAccessToken(accessToken);
     setIsAuthenticated(true);
-    loadFriendActivity(spDcCookie);
+    await loadItems(accessToken);
   };
 
-  const loadFriendActivity = async (cookie: string) => {
+  const loadItems = async (token: string) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      // Get access token from sp_dc cookie using spotify-buddylist library
-      const { accessToken: token } = await buddyList.getWebAccessToken(cookie);
-      setAccessToken(token); // Store for playback functionality
+      const api = new SpotifyWebApi();
+      api.setAccessToken(token);
 
-      // Fetch friend activity using spotify-buddylist library
-      const data = await buddyList.getFriendActivity(accessToken);
+      const [playlistsResponse, albumsResponse] = await Promise.all([
+        api.getUserPlaylists({ limit: 50 }),
+        api.getMySavedAlbums({ limit: 50 }),
+      ]);
 
-      const activeFriends = (data.friends || []).filter(
-        (friend: Friend) => friend.track && friend.track.uri
-      );
+      const playlists: MusicItem[] = (playlistsResponse.items as any[])
+        .filter((p: any) => p.tracks.total > 5)
+        .map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          uri: p.uri,
+          type: "playlist" as const,
+          images: p.images,
+          tracks: p.tracks,
+        }));
 
-      setFriends(activeFriends);
+      const albums: MusicItem[] = (albumsResponse.items as any[])
+        .filter((item: any) => item.album.tracks.total > 5)
+        .map((item: any) => ({
+          id: item.album.id,
+          name: item.album.name,
+          uri: item.album.uri,
+          type: "album" as const,
+          images: item.album.images,
+          tracks: item.album.tracks,
+          artist: item.album.artists[0]?.name,
+        }));
+
+      setItems([...playlists, ...albums]);
       setIsLoading(false);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to fetch friend activity. Make sure your sp_dc cookie is valid."
-      );
+    } catch (err: any) {
+      setError(err.message || "Failed to load music");
       setIsLoading(false);
     }
   };
 
-  const playTrack = async (trackUri: string) => {
+  const selectRandom = () => {
+    if (items.length === 0) {
+      alert("No items found");
+      return;
+    }
+
+    const now = Date.now();
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+
+    const unplayedRecently = items.filter(
+      (item) => !playHistory[item.id] || playHistory[item.id] < oneDayAgo
+    );
+
+    const eligible = unplayedRecently.length > 0 ? unplayedRecently : items;
+    const randomIndex = Math.floor(Math.random() * eligible.length);
+    const selected = eligible[randomIndex];
+
+    setSelectedItem(selected);
+  };
+
+  const playSelected = async () => {
+    if (!selectedItem) {
+      alert("No item selected");
+      return;
+    }
+
     try {
-      const response = await fetch(
-        "https://api.spotify.com/v1/me/player/play",
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            uris: [trackUri],
-          }),
-        }
-      );
+      await spotifyApiRef.current.play({
+        context_uri: selectedItem.uri,
+      });
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          alert(
-            "No active device found. Please open Spotify on your phone or computer first!"
-          );
-        } else {
-          throw new Error("Failed to play track");
-        }
+      const newHistory = {
+        ...playHistory,
+        [selectedItem.id]: Date.now(),
+      };
+      setPlayHistory(newHistory);
+      localStorage.setItem("playlist_play_history", JSON.stringify(newHistory));
+
+      alert(`Now playing: ${selectedItem.name}`);
+    } catch (err: any) {
+      if (err.status === 404) {
+        alert(
+          "No active device found. Please open Spotify on your phone or computer first!"
+        );
+      } else {
+        alert("Failed to play: " + (err.message || "Unknown error"));
       }
-    } catch (err) {
-      alert(
-        "Failed to play track: " +
-          (err instanceof Error ? err.message : "Unknown error")
-      );
     }
   };
 
-  const refreshFriends = () => {
-    if (spDcCookie) {
-      loadFriendActivity(spDcCookie);
-    }
+  const clearHistory = () => {
+    setPlayHistory({});
+    localStorage.removeItem("playlist_play_history");
+    alert("Play history cleared!");
+  };
+
+  const logout = () => {
+    localStorage.removeItem("spotify_token");
+    setIsAuthenticated(false);
+    setAccessToken("");
+    setItems([]);
+    setSelectedItem(null);
   };
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-500 to-gray-900 p-5 text-white">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="text-3xl font-bold text-center mb-2">
-            🎵 Friend Activity
-          </h1>
-          <p className="text-center opacity-80 mb-8 text-sm">
-            See what your friends are listening to right now
-          </p>
+      <div
+        style={{
+          color: "black",
+          minHeight: "100vh",
+          background: "#F5F5DC",
+          padding: "20px",
+          fontFamily: '"Courier New", monospace',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "600px",
+            margin: "0 auto",
+            border: "4px ridge #0000CC",
+            background: "#fff",
+            boxShadow: "6px 6px 0px #999",
+          }}
+        >
+          <div
+            style={{
+              background: "#0000CC",
+              color: "#FFFF00",
+              padding: "10px",
+              textAlign: "center",
+              fontWeight: "bold",
+              fontSize: "18px",
+              letterSpacing: "2px",
+              borderBottom: "3px solid #FF0000",
+            }}
+          >
+            ♫ WILL IT INTERNET 04 ♫
+          </div>
 
-          <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8">
-            <p className="mb-4 text-sm leading-relaxed">
-              <strong>
-                Enter your Spotify sp_dc cookie to see friend activity:
-              </strong>
+          <div style={{ padding: "20px" }}>
+            <p style={{ marginBottom: "15px", fontSize: "14px" }}>
+              <strong>ENTER SPOTIFY ACCESS TOKEN:</strong>
             </p>
-
-            <div className="bg-black/20 p-4 rounded-lg mb-5 text-xs leading-loose">
-              <strong>How to get your sp_dc cookie:</strong>
-              <ol className="ml-5 mt-2 space-y-2">
-                <li>
-                  Open{" "}
-                  <a
-                    href="https://open.spotify.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-green-400 underline"
-                  >
-                    open.spotify.com
-                  </a>{" "}
-                  and log in
-                </li>
-                <li>Open Developer Tools (F12 or Right-click → Inspect)</li>
-                <li>Go to the "Application" or "Storage" tab</li>
-                <li>Click "Cookies" → "https://open.spotify.com"</li>
-                <li>
-                  Find{" "}
-                  <code className="bg-white/20 px-2 py-0.5 rounded font-mono">
-                    sp_dc
-                  </code>{" "}
-                  and copy its Value
-                </li>
-              </ol>
-            </div>
 
             <input
               type="password"
-              value={spDcCookie}
-              onChange={(e) => setSpDcCookie(e.target.value)}
-              placeholder="Paste your sp_dc cookie here"
-              className="w-full p-3 rounded-lg mb-4 text-gray-900 font-mono text-sm"
+              value={accessToken}
+              onChange={(e) => setAccessToken(e.target.value)}
+              placeholder="ACCESS TOKEN"
+              style={{
+                width: "100%",
+                padding: "8px",
+                border: "2px solid #000",
+                fontFamily: '"Courier New", monospace',
+                fontSize: "12px",
+                marginBottom: "15px",
+              }}
             />
 
             <button
               onClick={saveCredentials}
-              className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full transition-all hover:scale-105"
+              style={{
+                width: "100%",
+                padding: "10px",
+                background: "#FF6600",
+                color: "#fff",
+                border: "3px outset #FF8800",
+                fontFamily: '"Courier New", monospace',
+                fontWeight: "bold",
+                fontSize: "14px",
+                cursor: "pointer",
+                letterSpacing: "1px",
+              }}
             >
-              Connect
+              ☞ CONNECT ☜
             </button>
 
-            <p className="mt-4 text-xs opacity-70 text-center">
-              The access token will be automatically generated from your cookie
-            </p>
+            <div
+              style={{
+                marginTop: "15px",
+                padding: "10px",
+                border: "1px solid #ccc",
+                background: "#f9f9f9",
+                fontSize: "11px",
+                lineHeight: "1.6",
+              }}
+            >
+              <strong>INSTRUCTIONS:</strong>
+              <br />
+              Get token from:{" "}
+              <a
+                href="https://developer.spotify.com/console/put-play/"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "#0000ff" }}
+              >
+                Spotify Console
+              </a>
+              <br />
+              Required scopes: user-modify-playback-state,
+              playlist-read-private, user-library-read
+            </div>
           </div>
         </div>
       </div>
@@ -173,11 +272,28 @@ export default function Page4() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-500 to-gray-900 p-5 text-white">
-        <div className="max-w-2xl mx-auto">
-          <div className="text-center py-20 text-lg">
-            Connecting to Spotify...
-          </div>
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#F5F5DC",
+          padding: "20px",
+          fontFamily: '"Courier New", monospace',
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            border: "4px double #FF00FF",
+            padding: "20px",
+            background: "#FFFFCC",
+            textAlign: "center",
+            fontWeight: "bold",
+            boxShadow: "5px 5px 0px #999",
+          }}
+        >
+          ⌛ LOADING... PLEASE WAIT... ⌛
         </div>
       </div>
     );
@@ -185,91 +301,519 @@ export default function Page4() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-500 to-gray-900 p-5 text-white">
-        <div className="max-w-2xl mx-auto">
-          <div className="bg-red-500/20 p-4 rounded-lg mb-5 border-l-4 border-red-500">
-            <strong>Oops!</strong> {error}
-          </div>
-          <button
-            onClick={() => window.location.reload()}
-            className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full transition-all"
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#F5F5DC",
+          padding: "20px",
+          fontFamily: '"Courier New", monospace',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "600px",
+            margin: "0 auto",
+            border: "4px solid #ff0000",
+            background: "#fff",
+            boxShadow: "6px 6px 0px #999",
+          }}
+        >
+          <div
+            style={{
+              background: "#ff0000",
+              color: "#FFFF00",
+              padding: "10px",
+              textAlign: "center",
+              fontWeight: "bold",
+              borderBottom: "3px solid #000",
+            }}
           >
-            Try Again
-          </button>
+            ⚠️ ERROR ⚠️
+          </div>
+          <div style={{ padding: "20px" }}>
+            <p style={{ marginBottom: "15px" }}>{error}</p>
+            <button
+              onClick={() => loadItems(accessToken)}
+              style={{
+                padding: "8px 16px",
+                background: "#0000CC",
+                color: "#fff",
+                border: "3px outset #6666FF",
+                fontFamily: '"Courier New", monospace',
+                cursor: "pointer",
+                marginRight: "10px",
+                fontWeight: "bold",
+              }}
+            >
+              RETRY
+            </button>
+            <button
+              onClick={logout}
+              style={{
+                padding: "8px 16px",
+                background: "#CC0000",
+                color: "#fff",
+                border: "3px outset #FF0000",
+                fontFamily: '"Courier New", monospace',
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              LOGOUT
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-green-500 to-gray-900 p-5 text-white">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold text-center mb-2">
-          🎵 Friend Activity
-        </h1>
-        <p className="text-center opacity-80 mb-8 text-sm">
-          See what your friends are listening to right now
-        </p>
+  const playlists = items.filter((i) => i.type === "playlist");
+  const albums = items.filter((i) => i.type === "album");
 
-        <div className="text-center p-4 bg-white/10 rounded-lg mb-5 text-sm">
-          {friends.length === 0
-            ? "No active listeners"
-            : `${friends.length} friend${
-                friends.length !== 1 ? "s" : ""
-              } listening now`}
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#F5F5DC",
+        padding: "20px",
+        fontFamily: '"Courier New", monospace',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: "800px",
+          margin: "0 auto",
+        }}
+      >
+        <div
+          style={{
+            border: "4px ridge #FF00FF",
+            background: "#fff",
+            marginBottom: "20px",
+            boxShadow: "5px 5px 0px #999",
+          }}
+        >
+          <div
+            style={{
+              background: "#0000CC",
+              color: "#FFFF00",
+              padding: "10px",
+              textAlign: "center",
+              fontWeight: "bold",
+              fontSize: "18px",
+              letterSpacing: "2px",
+              borderBottom: "3px solid #FF0000",
+            }}
+          >
+            ♫ WILL IT INTERNET 04 ♫
+          </div>
+
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: "12px",
+            }}
+          >
+            <tbody>
+              <tr style={{ background: "#FFFFCC" }}>
+                <td
+                  style={{
+                    padding: "8px",
+                    borderBottom: "2px solid #FF6600",
+                    fontWeight: "bold",
+                    width: "40%",
+                  }}
+                >
+                  TOTAL PLAYLISTS:
+                </td>
+                <td
+                  style={{
+                    padding: "8px",
+                    borderBottom: "2px solid #FF6600",
+                  }}
+                >
+                  {playlists.length}
+                </td>
+              </tr>
+              <tr style={{ background: "#CCFFCC" }}>
+                <td
+                  style={{
+                    padding: "8px",
+                    borderBottom: "2px solid #FF6600",
+                    fontWeight: "bold",
+                  }}
+                >
+                  TOTAL ALBUMS:
+                </td>
+                <td
+                  style={{
+                    padding: "8px",
+                    borderBottom: "2px solid #FF6600",
+                  }}
+                >
+                  {albums.length}
+                </td>
+              </tr>
+              <tr style={{ background: "#FFCCFF" }}>
+                <td
+                  style={{
+                    padding: "8px",
+                    fontWeight: "bold",
+                  }}
+                >
+                  FILTER:
+                </td>
+                <td
+                  style={{
+                    padding: "8px",
+                  }}
+                >
+                  &gt;5 TRACKS ONLY
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div
+            style={{
+              padding: "15px",
+              borderTop: "3px solid #FF00FF",
+              display: "flex",
+              gap: "10px",
+              flexWrap: "wrap",
+              background: "#F0F0F0",
+            }}
+          >
+            <button
+              onClick={selectRandom}
+              style={{
+                padding: "10px 20px",
+                background: "#FF00FF",
+                color: "#fff",
+                border: "3px outset #FF66FF",
+                fontFamily: '"Courier New", monospace',
+                fontWeight: "bold",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              RANDOM
+            </button>
+            {/* <button
+              onClick={clearHistory}
+              style={{
+                padding: "10px 20px",
+                background: "#00CC00",
+                color: "#fff",
+                border: "3px outset #00FF00",
+                fontFamily: '"Courier New", monospace',
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              CLEAR HISTORY
+            </button> */}
+            <button
+              onClick={logout}
+              style={{
+                padding: "10px 20px",
+                background: "#CC0000",
+                color: "#fff",
+                border: "3px outset #FF0000",
+                fontFamily: '"Courier New", monospace',
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              LOGOUT
+            </button>
+          </div>
         </div>
 
-        <button
-          onClick={refreshFriends}
-          className="mx-auto block bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-full mb-5 transition-all"
-        >
-          ↻ Refresh
-        </button>
-
-        <div>
-          {friends.length === 0 ? (
-            <div className="text-center py-16 opacity-70">
-              <p className="text-lg mb-2">😴 Nobody's listening right now</p>
-              <p className="text-sm">
-                Your friends might be offline or have their activity hidden.
-              </p>
+        {selectedItem && (
+          <div
+            style={{
+              border: "3px solid #FF00FF",
+              background: "#FFFFCC",
+              marginBottom: "20px",
+            }}
+          >
+            <div
+              style={{
+                background: "#FF00FF",
+                color: "#FFFF00",
+                padding: "8px",
+                fontWeight: "bold",
+                textAlign: "center",
+                borderBottom: "3px solid #FF6600",
+              }}
+            >
+              ★ SELECTED {selectedItem.type.toUpperCase()} ★
             </div>
-          ) : (
-            <>
-              {friends.map((friend, index) => (
-                <div
-                  key={index}
-                  onClick={() => playTrack(friend.track.uri)}
-                  className="bg-white/10 backdrop-blur-lg rounded-xl p-5 mb-4 cursor-pointer transition-all hover:bg-white/15 hover:border-green-500 border-2 border-transparent hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <div className="flex items-center mb-2">
-                    <span className="font-bold text-base flex-1">
-                      {friend.user.name}
-                    </span>
-                    <span className="w-2 h-2 bg-green-500 rounded-full ml-2 animate-pulse"></span>
-                  </div>
-                  <div>
-                    <div className="text-sm mb-1 font-medium">
-                      {friend.track.name}
-                    </div>
-                    <div className="text-xs opacity-70">
-                      {friend.track.artist?.name || "Unknown Artist"}
-                    </div>
-                    {friend.track.album && (
-                      <div className="text-xs opacity-50 mt-0.5">
-                        {friend.track.album.name}
-                      </div>
-                    )}
-                  </div>
+            <div style={{ padding: "15px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "15px",
+                  marginBottom: "15px",
+                  alignItems: "flex-start",
+                }}
+              >
+                {selectedItem.images && selectedItem.images[0] && (
+                  <img
+                    src={selectedItem.images[0].url}
+                    alt={selectedItem.name}
+                    style={{
+                      width: "100px",
+                      height: "100px",
+                      border: "2px solid #000",
+                    }}
+                  />
+                )}
+                <div style={{ flex: 1 }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      fontSize: "12px",
+                    }}
+                  >
+                    <tbody>
+                      <tr>
+                        <td
+                          style={{
+                            padding: "4px 8px 4px 0",
+                            fontWeight: "bold",
+                            width: "100px",
+                          }}
+                        >
+                          NAME:
+                        </td>
+                        <td style={{ padding: "4px 0" }}>
+                          {selectedItem.name}
+                        </td>
+                      </tr>
+                      {selectedItem.artist && (
+                        <tr>
+                          <td
+                            style={{
+                              padding: "4px 8px 4px 0",
+                              fontWeight: "bold",
+                            }}
+                          >
+                            ARTIST:
+                          </td>
+                          <td style={{ padding: "4px 0" }}>
+                            {selectedItem.artist}
+                          </td>
+                        </tr>
+                      )}
+                      <tr>
+                        <td
+                          style={{
+                            padding: "4px 8px 4px 0",
+                            fontWeight: "bold",
+                          }}
+                        >
+                          TRACKS:
+                        </td>
+                        <td style={{ padding: "4px 0" }}>
+                          {selectedItem.tracks.total}
+                        </td>
+                      </tr>
+                      {playHistory[selectedItem.id] && (
+                        <tr>
+                          <td
+                            style={{
+                              padding: "4px 8px 4px 0",
+                              fontWeight: "bold",
+                            }}
+                          >
+                            LAST PLAYED:
+                          </td>
+                          <td style={{ padding: "4px 0" }}>
+                            {new Date(
+                              playHistory[selectedItem.id]
+                            ).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-              <div className="text-center mt-3 text-xs opacity-60">
-                👆 Tap any song to play it on your Spotify
               </div>
-            </>
-          )}
+              <button
+                onClick={playSelected}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  background: "#0000CC",
+                  color: "#FFFF00",
+                  border: "4px outset #6666FF",
+                  fontFamily: '"Courier New", monospace',
+                  fontWeight: "bold",
+                  fontSize: "16px",
+                  cursor: "pointer",
+                  letterSpacing: "2px",
+                }}
+              >
+                ▶ PLAY NOW ◀
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!selectedItem && (
+          <div
+            style={{
+              border: "3px dashed #0000CC",
+              padding: "40px",
+              textAlign: "center",
+              background: "#E6E6FA",
+              color: "#0000CC",
+              fontWeight: "bold",
+            }}
+          >
+            NO SONG PLAYING...
+          </div>
+        )}
+
+        <div
+          style={{
+            border: "3px solid #00CC00",
+            background: "#fff",
+            marginTop: "20px",
+            boxShadow: "4px 4px 0px #999",
+          }}
+        >
+          <div
+            style={{
+              background: "#00CC00",
+              padding: "8px",
+              fontWeight: "bold",
+              fontSize: "12px",
+              borderBottom: "3px solid #FF6600",
+              color: "#fff",
+            }}
+          >
+            LIBRARY
+          </div>
+          <div
+            style={{
+              maxHeight: "300px",
+              overflowY: "auto",
+              fontSize: "11px",
+            }}
+          >
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+              }}
+            >
+              <thead>
+                <tr style={{ background: "#FFCCFF" }}>
+                  <th
+                    style={{
+                      padding: "6px",
+                      textAlign: "left",
+                      borderBottom: "2px solid #FF00FF",
+                      position: "sticky",
+                      top: 0,
+                      background: "#FFCCFF",
+                    }}
+                  >
+                    TYPE
+                  </th>
+                  <th
+                    style={{
+                      padding: "6px",
+                      textAlign: "left",
+                      borderBottom: "2px solid #FF00FF",
+                      position: "sticky",
+                      top: 0,
+                      background: "#FFCCFF",
+                    }}
+                  >
+                    NAME
+                  </th>
+                  <th
+                    style={{
+                      padding: "6px",
+                      textAlign: "right",
+                      borderBottom: "2px solid #FF00FF",
+                      position: "sticky",
+                      top: 0,
+                      background: "#FFCCFF",
+                    }}
+                  >
+                    TRACKS
+                  </th>
+                  <th
+                    style={{
+                      padding: "6px",
+                      textAlign: "right",
+                      borderBottom: "2px solid #FF00FF",
+                      position: "sticky",
+                      top: 0,
+                      background: "#FFCCFF",
+                    }}
+                  >
+                    PLAYED
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item, idx) => (
+                  <tr
+                    key={item.id}
+                    style={{
+                      background: idx % 2 === 0 ? "#fff" : "#f9f9f9",
+                      borderBottom: "1px solid #ddd",
+                    }}
+                  >
+                    <td style={{ padding: "4px 6px" }}>
+                      {item.type === "playlist" ? "PL" : "AL"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "4px 6px",
+                        maxWidth: "200px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.name}
+                      {item.artist && ` - ${item.artist}`}
+                    </td>
+                    <td
+                      style={{
+                        padding: "4px 6px",
+                        textAlign: "right",
+                      }}
+                    >
+                      {item.tracks.total}
+                    </td>
+                    <td
+                      style={{
+                        padding: "4px 6px",
+                        textAlign: "right",
+                      }}
+                    >
+                      {playHistory[item.id]
+                        ? new Date(playHistory[item.id]).toLocaleDateString()
+                        : "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default RandomPlaylistPlayer;
